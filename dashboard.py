@@ -1,4 +1,4 @@
-#dashboard.py
+# dashboard.py
 import streamlit as st
 import pandas as pd
 from pymongo import MongoClient
@@ -8,7 +8,10 @@ import plotly.graph_objects as go
 import json
 import requests
 import os
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
 
 st.set_page_config(
     page_title="🌍 Global Disaster Monitor - Google x MongoDB",
@@ -24,17 +27,6 @@ def init_mongodb():
     return client["gdelt"]["disasters"]
 
 collection = init_mongodb()
-
-# Load data with enhanced location parsing
-@st.cache_data(ttl=600)
-def load_disaster_data():
-    disasters = list(collection.find({}).limit(2000))
-    
-    df_data = []
-    for doc in disasters:
-        coords = doc['location']['coordinates']
-        location_parts = str(doc.get('location_name', '')).split(', ')
-        
 
 # Load data with enhanced location parsing
 @st.cache_data(ttl=600)
@@ -86,14 +78,9 @@ DISASTER_COLORS = {
     'other': '#666666'
 }
 
-def create_google_map_html(df_filtered, google_api_key=None):
+def create_google_map_html(df_filtered):
     """Create Google Maps HTML with markers"""
-    
-    # Use environment variable if no key provided
-    if not google_api_key:
-        google_api_key = os.getenv('GOOGLE_MAPS_API_KEY')
-    
-
+    google_api_key = os.getenv('GOOGLE_MAPS_API_KEY')
     
     # Prepare markers data
     markers_data = []
@@ -112,8 +99,6 @@ def create_google_map_html(df_filtered, google_api_key=None):
                     <p><strong>⚠️ Severity:</strong> {row['severity']}/5</p>
                     <p><strong>📰 Mentions:</strong> {row['mentions']}</p>
                     <p><strong>🤖 AI Topics:</strong> {row['topic_keywords']}</p>
-                    <p><strong>👥 Actors:</strong> {row['actor1']} → {row['actor2']}</p>
-                    <p><strong>🎯 Goldstein:</strong> {row['goldstein']}</p>
                     {f"<p><a href='{row['source_url']}' target='_blank'>📰 Read News Source</a></p>" if row['source_url'] else ""}
                 </div>
             """,
@@ -122,24 +107,31 @@ def create_google_map_html(df_filtered, google_api_key=None):
         }
         markers_data.append(marker_data)
     
-    # Google Maps HTML template
     if not google_api_key:
         return f"""
+        <!DOCTYPE html>
+        <html>
+        <body>
+            <div style="padding: 20px; text-align: center; background: #f0f0f0; height: 460px; display: flex; align-items: center; justify-content: center;">
+                <div>
+                    <h3>🗺️ Google Maps View</h3>
+                    <p>Google Maps API key not found in environment variables</p>
+                    <p>Add GOOGLE_MAPS_API_KEY to your .env file</p>
+                    <p>Current markers: {len(markers_data)} disasters</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    
+    return f"""
     <!DOCTYPE html>
     <html>
     <head>
         <script async defer src="https://maps.googleapis.com/maps/api/js?key={google_api_key}&callback=initMap"></script>
-        <style>
-            #map {{ height: 500px; width: 100%; }}
-            .custom-marker {{
-                border-radius: 50%;
-                border: 2px solid white;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-            }}
-        </style>
     </head>
     <body>
-        <div id="map"></div>
+        <div id="map" style="height: 500px; width: 100%;"></div>
         
         <script>
             let map;
@@ -176,21 +168,10 @@ def create_google_map_html(df_filtered, google_api_key=None):
                     }});
                 }});
             }}
-            
-            // Fallback if Google Maps fails
-            window.addEventListener('error', function(e) {{
-                if (e.message.includes('Google') || e.message.includes('maps')) {{
-                    document.getElementById('map').innerHTML = 
-                    '<div style="padding: 20px; text-align: center; background: #f0f0f0; height: 460px; display: flex; align-items: center; justify-content: center;">' +
-                    '<div><h3>🗺️ Google Maps View</h3><p>Add your Google Maps API key to see the interactive map</p><p>Current markers: {len(markers_data)} disasters</p></div></div>';
-                }}
-            }});
         </script>
     </body>
     </html>
     """
-    
-    return google_maps_html
 
 # Main app
 def main():
@@ -228,9 +209,6 @@ def main():
         start_date, end_date = date_range
         df = df[(df['date'].dt.date >= start_date) & (df['date'].dt.date <= end_date)]
     
-    # Location filters
-    st.sidebar.markdown("### 🌎 Location Filters")
-    
     # Country filter
     countries = sorted(df['country'].unique().tolist())
     selected_countries = st.sidebar.multiselect(
@@ -239,51 +217,31 @@ def main():
         default=countries[:10] if len(countries) > 10 else countries
     )
     
-    # Filter dataframe by selected countries
-    df_country_filtered = df[df['country'].isin(selected_countries)]
-    
-    # State filter (based on selected countries)
-    if not df_country_filtered.empty:
-        states = sorted(df_country_filtered['state'].unique().tolist())
-        selected_states = st.sidebar.multiselect(
-            "🏛️ Select States/Regions",
-            states,
-            default=states
-        )
-        df_location_filtered = df_country_filtered[df_country_filtered['state'].isin(selected_states)]
-    else:
-        df_location_filtered = df_country_filtered
-    
     # Disaster type filter
-    st.sidebar.markdown("### 🔥 Disaster Types")
-    disaster_types = df_location_filtered['disaster_type'].unique().tolist()
+    df_country_filtered = df[df['country'].isin(selected_countries)]
+    disaster_types = df_country_filtered['disaster_type'].unique().tolist()
     selected_types = st.sidebar.multiselect(
-        "Select Disaster Types",
+        "🔥 Select Disaster Types",
         disaster_types,
         default=disaster_types
     )
     
     # Severity filter
-    st.sidebar.markdown("### ⚠️ Severity Level")
     severity_range = st.sidebar.slider(
-        "Severity Range (1=Low, 5=High)",
+        "⚠️ Severity Range (1=Low, 5=High)",
         min_value=1,
         max_value=5,
         value=(1, 5)
     )
     
     # Apply all filters
-    df_filtered = df_location_filtered[
-        (df_location_filtered['disaster_type'].isin(selected_types)) &
-        (df_location_filtered['severity'] >= severity_range[0]) &
-        (df_location_filtered['severity'] <= severity_range[1])
+    df_filtered = df_country_filtered[
+        (df_country_filtered['disaster_type'].isin(selected_types)) &
+        (df_country_filtered['severity'] >= severity_range[0]) &
+        (df_country_filtered['severity'] <= severity_range[1])
     ]
     
-    # Google Maps API Key input
-    
-    
-    
-    # Main content
+    # Main metrics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -302,114 +260,41 @@ def main():
     st.markdown("## 🗺️ Interactive Disaster Map")
     
     if not df_filtered.empty:
-        # Create Google Maps
         google_map_html = create_google_map_html(df_filtered)
         st.components.v1.html(google_map_html, height=520)
-        
         st.info(f"📍 Showing {len(df_filtered)} disasters on map")
     else:
         st.warning("⚠️ No disasters match your current filters")
     
-    # Analytics section
+    # Analytics charts
     st.markdown("## 📊 Disaster Analytics")
     
     if not df_filtered.empty:
         col1, col2 = st.columns(2)
         
         with col1:
-            # Disaster type distribution
             type_counts = df_filtered['disaster_type'].value_counts()
             fig_pie = px.pie(
                 values=type_counts.values,
                 names=type_counts.index,
-                title="🔥 Disaster Types Distribution",
-                color_discrete_map=DISASTER_COLORS
+                title="🔥 Disaster Types Distribution"
             )
-            fig_pie.update_layout(height=400)
             st.plotly_chart(fig_pie, use_container_width=True)
         
         with col2:
-            # Severity by country
             severity_by_country = df_filtered.groupby('country')['severity'].mean().sort_values(ascending=False).head(10)
             fig_bar = px.bar(
                 x=severity_by_country.values,
                 y=severity_by_country.index,
                 orientation='h',
-                title="⚠️ Average Severity by Country",
-                labels={'x': 'Average Severity', 'y': 'Country'}
+                title="⚠️ Average Severity by Country"
             )
-            fig_bar.update_layout(height=400)
             st.plotly_chart(fig_bar, use_container_width=True)
-        
-        # Timeline
-        daily_counts = df_filtered.groupby('date_str').size().reset_index(name='count')
-        fig_timeline = px.line(
-            daily_counts,
-            x='date_str',
-            y='count',
-            title="📈 Disaster Timeline",
-            labels={'date_str': 'Date', 'count': 'Number of Disasters'}
-        )
-        fig_timeline.update_layout(height=300)
-        st.plotly_chart(fig_timeline, use_container_width=True)
-    
-    # Detailed table
-    st.markdown("## 📋 Detailed Disaster Records")
-    
-    if not df_filtered.empty:
-        # Display options
-        col1, col2 = st.columns(2)
-        with col1:
-            show_all = st.checkbox("Show all records", value=False)
-        with col2:
-            sort_by = st.selectbox("Sort by", ['date', 'severity', 'mentions'], index=0)
-        
-        # Prepare display dataframe
-        display_df = df_filtered.copy()
-        display_df = display_df.sort_values(sort_by, ascending=False)
-        
-        if not show_all:
-            display_df = display_df.head(20)
-        
-        # Format for display
-        display_cols = {
-            'date_str': 'Date',
-            'disaster_type': 'Type',
-            'location_name': 'Location',
-            'country': 'Country',
-            'severity': 'Severity',
-            'mentions': 'Mentions',
-            'topic_keywords': 'AI Topics',
-            'source_url': 'News Source'
-        }
-        
-        display_df_formatted = display_df[list(display_cols.keys())].rename(columns=display_cols)
-        
-        # Make URLs clickable
-        if 'News Source' in display_df_formatted.columns:
-            display_df_formatted['News Source'] = display_df_formatted['News Source'].apply(
-                lambda x: f'<a href="{x}" target="_blank">📰 Read Article</a>' if x else 'No source'
-            )
-        
-        st.dataframe(
-            display_df_formatted,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "News Source": st.column_config.LinkColumn("News Source")
-            }
-        )
     
     # Footer
     st.markdown("---")
     st.markdown("""
-    **🚀 Powered by:**
-    - 🌍 **Google Maps API** for interactive mapping
-    - 🍃 **MongoDB Atlas** for scalable data storage
-    - 🤖 **AI Topic Modeling** with LDA clustering
-    - 📊 **GDELT Project** for real-time global event data
-    
-    *Built for Google Cloud × MongoDB Hackathon*
+    **🚀 Powered by:** Google Maps API • MongoDB Atlas • AI Topic Modeling • GDELT Project
     """)
 
 if __name__ == "__main__":
