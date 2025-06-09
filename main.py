@@ -1,413 +1,322 @@
-# dashboard.py
-import streamlit as st
+#main.py
 import pandas as pd
+import requests
+import zipfile
+import io
 from pymongo import MongoClient
 from datetime import datetime, timedelta
-import plotly.express as px
-import plotly.graph_objects as go
-import json
-import requests
-import os
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.cluster import KMeans
+import re
+import logging
+import ssl
 
-st.set_page_config(
-    page_title="🌍 Global Disaster Monitor - Google x MongoDB",
-    page_icon="🌍",
-    layout="wide"
-)
+# --- Enhanced MongoDB Setup with SSL Fix ---
+MONGO_URI = os.getenv('MONGO_URI')
+if not MONGO_URI:
+    raise ValueError("MONGO_URI environment variable is required")
 
-# MongoDB connection
-@st.cache_resource
-def init_mongodb():
-    MONGO_URI = "mongodb+srv://Tanisha:Hello123@worlddisastersproject.rew0hfd.mongodb.net/?ssl=true&ssl_cert_reqs=CERT_NONE&retryWrites=true&w=majority"
-    client = MongoClient(MONGO_URI, tls=True, tlsInsecure=True)
-    return client["gdelt"]["disasters"]
-
-collection = init_mongodb()
-
-# Load data with enhanced location parsing
-@st.cache_data(ttl=600)
-def load_disaster_data():
-    disasters = list(collection.find({}).limit(2000))
+# Connect to MongoDB
+try:
+    client = MongoClient(
+        MONGO_URI,
+        tls=True,
+        tlsInsecure=True,
+        serverSelectionTimeoutMS=30000,
+        connectTimeoutMS=20000,
+        socketTimeoutMS=20000
+    )
     
-    df_data = []
-    for doc in disasters:
-        coords = doc['location']['coordinates']
-        location_parts = str(doc.get('location_name', '')).split(', ')
-        
-        # Parse location hierarchy
-        country = location_parts[-1] if len(location_parts) > 0 else 'Unknown'
-        state = location_parts[-2] if len(location_parts) > 1 else 'Unknown'
-        city = location_parts[0] if len(location_parts) > 0 else 'Unknown'
-        
-        df_data.append({
-            'lat': coords[1],
-            'lon': coords[0],
-            'disaster_type': doc['disaster_type'],
-            'severity': doc['severity'],
-            'location_name': doc['location_name'],
-            'country': country,
-            'state': state,
-            'city': city,
-            'date': doc['date'],
-            'date_str': doc['date'].strftime('%Y-%m-%d'),
-            'mentions': doc['mentions'],
-            'topic_keywords': ', '.join(doc.get('topic_keywords', [])),
-            'source_url': doc.get('source_url', ''),
-            'actor1': str(doc.get('actor1', '')),
-            'actor2': str(doc.get('actor2', '')),
-            'goldstein': doc.get('goldstein', 0),
-            'tone': doc.get('tone', 0),
-            'cluster_id': doc.get('cluster_id', 'N/A')
-        })
+    # Test the connection
+    client.admin.command('ping')
+    print("MongoDB connection successful!")
     
-    return pd.DataFrame(df_data)
+except Exception as e:
+    print(f"MongoDB connection failed: {e}")
+    raise
 
-# Color mapping for disaster types
-DISASTER_COLORS = {
-    'earthquake': '#FF0000',
-    'flood': '#0066CC', 
-    'wildfire': '#FF6600',
-    'storm': '#9900CC',
-    'armed_conflict': '#CC0000',
-    'explosion': '#FF3300',
-    'accident': '#FFCC00',
-    'other': '#666666'
+db = client["gdelt"]
+collection = db["disasters"]
+
+# Create indexes for better performance
+try:
+    collection.create_index([("location", "2dsphere")])
+    collection.create_index([("date", 1)])
+    collection.create_index([("event_code", 1)])
+    collection.create_index([("disaster_type", 1)])
+    print("Indexes created successfully!")
+except Exception as e:
+    print(f"Index creation failed: {e}")
+
+# --- Disaster Event Codes (GDELT specific) ---
+DISASTER_CODES = {
+    # Natural Disasters
+    '0231': 'earthquake',
+    '0232': 'flood', 
+    '0233': 'drought',
+    '0234': 'hurricane_typhoon',
+    '0235': 'wildfire',
+    '0236': 'volcanic_activity',
+    '0237': 'landslide',
+    '0238': 'tsunami',
+    # Man-made Disasters
+    '180': 'terrorist_attack',
+    '190': 'armed_conflict',
+    '200': 'explosion',
+    '145': 'industrial_accident',
+    '1283': 'chemical_spill',
+    '1284': 'nuclear_incident'
 }
 
-def create_google_map_html(df_filtered, google_api_key=None):
-    """Create Google Maps HTML with markers"""
+def calculate_severity(goldstein, mentions, tone):
+    """Calculate disaster severity on scale 1-5"""
+    severity_score = 0
     
-    # Use environment variable if no key provided
-    if not google_api_key:
-        google_api_key = os.getenv('GOOGLE_MAPS_API_KEY')
+    # Goldstein scale contribution (more negative = more severe)
+    if goldstein <= -8:
+        severity_score += 3
+    elif goldstein <= -5:
+        severity_score += 2
+    elif goldstein <= -2:
+        severity_score += 1
     
-    # Prepare markers data
-    markers_data = []
-    for _, row in df_filtered.iterrows():
-        color = DISASTER_COLORS.get(row['disaster_type'], '#666666')
-        
-        marker_data = {
-            'lat': row['lat'],
-            'lng': row['lon'],
-            'title': f"{row['disaster_type'].title()}",
-            'info': f"""
-                <div style='max-width: 300px;'>
-                    <h3 style='color: {color}; margin: 0;'>{row['disaster_type'].title()}</h3>
-                    <p><strong>📍 Location:</strong> {row['location_name']}</p>
-                    <p><strong>📅 Date:</strong> {row['date_str']}</p>
-                    <p><strong>⚠️ Severity:</strong> {row['severity']}/5</p>
-                    <p><strong>📰 Mentions:</strong> {row['mentions']}</p>
-                    <p><strong>🤖 AI Topics:</strong> {row['topic_keywords']}</p>
-                    <p><strong>👥 Actors:</strong> {row['actor1']} → {row['actor2']}</p>
-                    <p><strong>🎯 Goldstein:</strong> {row['goldstein']}</p>
-                    {f"<p><a href='{row['source_url']}' target='_blank'>📰 Read News Source</a></p>" if row['source_url'] else ""}
-                </div>
-            """,
-            'color': color,
-            'size': int(row['severity']) * 3 + 5
-        }
-        markers_data.append(marker_data)
+    # Media attention (mentions)
+    if mentions >= 100:
+        severity_score += 2
+    elif mentions >= 50:
+        severity_score += 1
     
-    # Google Maps HTML template
-    if not google_api_key:
-        # Return fallback HTML when no API key is available
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <body>
-            <div id="map" style="padding: 20px; text-align: center; background: #f0f0f0; height: 460px; display: flex; align-items: center; justify-content: center;">
-                <div>
-                    <h3>🗺️ Google Maps View</h3>
-                    <p>Add your Google Maps API key to see the interactive map</p>
-                    <p>Current markers: {len(markers_data)} disasters</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+    # Tone (more negative = more severe)
+    if tone <= -5:
+        severity_score += 1
     
-    # Return full Google Maps HTML when API key is available
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <script async defer src="https://maps.googleapis.com/maps/api/js?key={google_api_key}&callback=initMap"></script>
-        <style>
-            #map {{ height: 500px; width: 100%; }}
-            .custom-marker {{
-                border-radius: 50%;
-                border: 2px solid white;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-            }}
-        </style>
-    </head>
-    <body>
-        <div id="map"></div>
-        
-        <script>
-            let map;
-            let markers = {json.dumps(markers_data)};
-            
-            function initMap() {{
-                map = new google.maps.Map(document.getElementById("map"), {{
-                    zoom: 2,
-                    center: {{ lat: 20, lng: 0 }},
-                    mapTypeId: 'terrain'
-                }});
-                
-                markers.forEach(function(markerData) {{
-                    const marker = new google.maps.Marker({{
-                        position: {{ lat: markerData.lat, lng: markerData.lng }},
-                        map: map,
-                        title: markerData.title,
-                        icon: {{
-                            path: google.maps.SymbolPath.CIRCLE,
-                            fillColor: markerData.color,
-                            fillOpacity: 0.8,
-                            strokeColor: 'white',
-                            strokeWeight: 2,
-                            scale: markerData.size
-                        }}
-                    }});
-                    
-                    const infoWindow = new google.maps.InfoWindow({{
-                        content: markerData.info
-                    }});
-                    
-                    marker.addListener('click', function() {{
-                        infoWindow.open(map, marker);
-                    }});
-                }});
-            }}
-            
-            // Fallback if Google Maps fails
-            window.addEventListener('error', function(e) {{
-                if (e.message.includes('Google') || e.message.includes('maps')) {{
-                    document.getElementById('map').innerHTML = 
-                    '<div style="padding: 20px; text-align: center; background: #f0f0f0; height: 460px; display: flex; align-items: center; justify-content: center;">' +
-                    '<div><h3>🗺️ Google Maps View</h3><p>Failed to load Google Maps</p><p>Please check your API key</p></div></div>';
-                }}
-            }});
-        </script>
-    </body>
-    </html>
-    """
+    return min(max(severity_score, 1), 5)
 
-# Main app
-def main():
-    # Header
-    st.markdown("""
-    # 🌍 Global Disaster Monitor
-    ### Google Cloud × MongoDB Hackathon Project
-    Real-time disaster tracking using GDELT data with AI analysis
-    """)
-    
-    # Load data
-    with st.spinner("🔄 Loading disaster data from MongoDB..."):
-        df = load_disaster_data()
-    
-    if df.empty:
-        st.error("❌ No data available. Please run the data collection script first.")
-        return
-    
-    # Sidebar filters
-    st.sidebar.markdown("## 🔍 Advanced Filters")
-    
-    # Date range filter
-    st.sidebar.markdown("### 📅 Date Range")
-    min_date = df['date'].min().date()
-    max_date = df['date'].max().date()
-    
-    date_range = st.sidebar.date_input(
-        "Select Date Range",
-        value=(max_date - timedelta(days=7), max_date),
-        min_value=min_date,
-        max_value=max_date
-    )
-    
-    if len(date_range) == 2:
-        start_date, end_date = date_range
-        df = df[(df['date'].dt.date >= start_date) & (df['date'].dt.date <= end_date)]
-    
-    # Location filters
-    st.sidebar.markdown("### 🌎 Location Filters")
-    
-    # Country filter
-    countries = sorted(df['country'].unique().tolist())
-    selected_countries = st.sidebar.multiselect(
-        "🏳️ Select Countries",
-        countries,
-        default=countries[:10] if len(countries) > 10 else countries
-    )
-    
-    # Filter dataframe by selected countries
-    df_country_filtered = df[df['country'].isin(selected_countries)]
-    
-    # State filter (based on selected countries)
-    if not df_country_filtered.empty:
-        states = sorted(df_country_filtered['state'].unique().tolist())
-        selected_states = st.sidebar.multiselect(
-            "🏛️ Select States/Regions",
-            states,
-            default=states
-        )
-        df_location_filtered = df_country_filtered[df_country_filtered['state'].isin(selected_states)]
-    else:
-        df_location_filtered = df_country_filtered
-    
-    # Disaster type filter
-    st.sidebar.markdown("### 🔥 Disaster Types")
-    disaster_types = df_location_filtered['disaster_type'].unique().tolist()
-    selected_types = st.sidebar.multiselect(
-        "Select Disaster Types",
-        disaster_types,
-        default=disaster_types
-    )
-    
-    # Severity filter
-    st.sidebar.markdown("### ⚠️ Severity Level")
-    severity_range = st.sidebar.slider(
-        "Severity Range (1=Low, 5=High)",
-        min_value=1,
-        max_value=5,
-        value=(1, 5)
-    )
-    
-    # Apply all filters
-    df_filtered = df_location_filtered[
-        (df_location_filtered['disaster_type'].isin(selected_types)) &
-        (df_location_filtered['severity'] >= severity_range[0]) &
-        (df_location_filtered['severity'] <= severity_range[1])
+def extract_keywords_from_actors(actor1, actor2):
+    """Extract disaster-related keywords from actor names"""
+    disaster_keywords = [
+        'earthquake', 'flood', 'fire', 'storm', 'hurricane', 'typhoon',
+        'drought', 'tsunami', 'volcano', 'landslide', 'avalanche',
+        'explosion', 'accident', 'spill', 'leak', 'collapse'
     ]
     
-    # Main content
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("🌍 Total Disasters", len(df_filtered))
-    with col2:
-        avg_severity = df_filtered['severity'].mean() if not df_filtered.empty else 0
-        st.metric("📊 Avg Severity", f"{avg_severity:.1f}/5")
-    with col3:
-        total_mentions = df_filtered['mentions'].sum() if not df_filtered.empty else 0
-        st.metric("📰 Total Mentions", f"{total_mentions:,}")
-    with col4:
-        unique_countries = df_filtered['country'].nunique() if not df_filtered.empty else 0
-        st.metric("🏳️ Countries Affected", unique_countries)
-    
-    # Map section
-    st.markdown("## 🗺️ Interactive Disaster Map")
-    
-    if not df_filtered.empty:
-        # Create Google Maps
-        google_map_html = create_google_map_html(df_filtered)
-        st.components.v1.html(google_map_html, height=520)
-        
-        st.info(f"📍 Showing {len(df_filtered)} disasters on map")
-    else:
-        st.warning("⚠️ No disasters match your current filters")
-    
-    # Analytics section
-    st.markdown("## 📊 Disaster Analytics")
-    
-    if not df_filtered.empty:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Disaster type distribution
-            type_counts = df_filtered['disaster_type'].value_counts()
-            fig_pie = px.pie(
-                values=type_counts.values,
-                names=type_counts.index,
-                title="🔥 Disaster Types Distribution",
-                color_discrete_map=DISASTER_COLORS
-            )
-            fig_pie.update_layout(height=400)
-            st.plotly_chart(fig_pie, use_container_width=True)
-        
-        with col2:
-            # Severity by country
-            severity_by_country = df_filtered.groupby('country')['severity'].mean().sort_values(ascending=False).head(10)
-            fig_bar = px.bar(
-                x=severity_by_country.values,
-                y=severity_by_country.index,
-                orientation='h',
-                title="⚠️ Average Severity by Country",
-                labels={'x': 'Average Severity', 'y': 'Country'}
-            )
-            fig_bar.update_layout(height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
-        
-        # Timeline
-        daily_counts = df_filtered.groupby('date_str').size().reset_index(name='count')
-        fig_timeline = px.line(
-            daily_counts,
-            x='date_str',
-            y='count',
-            title="📈 Disaster Timeline",
-            labels={'date_str': 'Date', 'count': 'Number of Disasters'}
-        )
-        fig_timeline.update_layout(height=300)
-        st.plotly_chart(fig_timeline, use_container_width=True)
-    
-    # Detailed table
-    st.markdown("## 📋 Detailed Disaster Records")
-    
-    if not df_filtered.empty:
-        # Display options
-        col1, col2 = st.columns(2)
-        with col1:
-            show_all = st.checkbox("Show all records", value=False)
-        with col2:
-            sort_by = st.selectbox("Sort by", ['date', 'severity', 'mentions'], index=0)
-        
-        # Prepare display dataframe
-        display_df = df_filtered.copy()
-        display_df = display_df.sort_values(sort_by, ascending=False)
-        
-        if not show_all:
-            display_df = display_df.head(20)
-        
-        # Format for display
-        display_cols = {
-            'date_str': 'Date',
-            'disaster_type': 'Type',
-            'location_name': 'Location',
-            'country': 'Country',
-            'severity': 'Severity',
-            'mentions': 'Mentions',
-            'topic_keywords': 'AI Topics',
-            'source_url': 'News Source'
-        }
-        
-        display_df_formatted = display_df[list(display_cols.keys())].rename(columns=display_cols)
-        
-        # Make URLs clickable
-        if 'News Source' in display_df_formatted.columns:
-            display_df_formatted['News Source'] = display_df_formatted['News Source'].apply(
-                lambda x: f'<a href="{x}" target="_blank">📰 Read Article</a>' if x else 'No source'
-            )
-        
-        st.dataframe(
-            display_df_formatted,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "News Source": st.column_config.LinkColumn("News Source")
-            }
-        )
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    **🚀 Powered by:**
-    - 🌍 **Google Maps API** for interactive mapping
-    - 🍃 **MongoDB Atlas** for scalable data storage
-    - 🤖 **AI Topic Modeling** with LDA clustering
-    - 📊 **GDELT Project** for real-time global event data
-    
-    *Built for Google Cloud × MongoDB Hackathon*
-    """)
+    text = f"{actor1} {actor2}".lower() if actor1 and actor2 else ""
+    found_keywords = [kw for kw in disaster_keywords if kw in text]
+    return found_keywords
 
+def classify_disaster_type(event_code, base_code, keywords, actor1, actor2):
+    """Classify disaster type based on codes and keywords"""
+    if str(event_code) in DISASTER_CODES:
+        return DISASTER_CODES[str(event_code)]
+    
+    if str(base_code) in DISASTER_CODES:
+        return DISASTER_CODES[str(base_code)]
+    
+    # Keyword-based classification
+    text = f"{actor1} {actor2}".lower() if actor1 and actor2 else ""
+    
+    if any(kw in text for kw in ['earthquake', 'quake']):
+        return 'earthquake'
+    elif any(kw in text for kw in ['flood', 'flooding']):
+        return 'flood'
+    elif any(kw in text for kw in ['fire', 'wildfire']):
+        return 'wildfire'
+    elif any(kw in text for kw in ['storm', 'hurricane', 'typhoon', 'cyclone']):
+        return 'storm'
+    elif any(kw in text for kw in ['explosion', 'blast']):
+        return 'explosion'
+    elif any(kw in text for kw in ['accident', 'crash']):
+        return 'accident'
+    else:
+        return 'other'
+
+def download_and_process_gdelt(date_str):
+    """Download and process GDELT data for a specific date"""
+    # FIX: Use the date_str parameter instead of hardcoded date
+    url = f"http://data.gdeltproject.org/events/{date_str}.export.CSV.zip"
+    
+    # GDELT column names
+    columns = [
+        "GLOBALEVENTID", "SQLDATE", "MonthYear", "Year", "FractionDate",
+        "Actor1Code", "Actor1Name", "Actor1CountryCode", "Actor1KnownGroupCode",
+        "Actor1EthnicCode", "Actor1Religion1Code", "Actor1Religion2Code",
+        "Actor1Type1Code", "Actor1Type2Code", "Actor1Type3Code",
+        "Actor2Code", "Actor2Name", "Actor2CountryCode", "Actor2KnownGroupCode",
+        "Actor2EthnicCode", "Actor2Religion1Code", "Actor2Religion2Code",
+        "Actor2Type1Code", "Actor2Type2Code", "Actor2Type3Code",
+        "IsRootEvent", "EventCode", "EventBaseCode", "EventRootCode",
+        "QuadClass", "GoldsteinScale", "NumMentions", "NumSources",
+        "NumArticles", "AvgTone", "Actor1Geo_Type", "Actor1Geo_FullName",
+        "Actor1Geo_CountryCode", "Actor1Geo_ADM1Code", "Actor1Geo_Lat",
+        "Actor1Geo_Long", "Actor1Geo_FeatureID", "Actor2Geo_Type",
+        "Actor2Geo_FullName", "Actor2Geo_CountryCode", "Actor2Geo_ADM1Code",
+        "Actor2Geo_Lat", "Actor2Geo_Long", "Actor2Geo_FeatureID",
+        "ActionGeo_Type", "ActionGeo_FullName", "ActionGeo_CountryCode",
+        "ActionGeo_ADM1Code", "ActionGeo_Lat", "ActionGeo_Long",
+        "ActionGeo_FeatureID", "DATEADDED", "SOURCEURL"
+    ]
+    
+    try:
+        print(f"Downloading from: {url}")
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        
+        # Extract and read CSV from zip
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            csv_filename = f"{date_str}.export.CSV"
+            with z.open(csv_filename) as csv_file:
+                df = pd.read_csv(csv_file, sep='\t', names=columns, dtype=str, na_values=[''])
+        
+        # Filter for disaster-related events
+        disaster_df = df[
+            (df['EventCode'].isin([str(code) for code in DISASTER_CODES.keys()])) |
+            (df['EventBaseCode'].isin([str(code) for code in DISASTER_CODES.keys()])) |
+            (df['Actor1Name'].str.contains('EARTHQUAKE|FLOOD|FIRE|STORM|HURRICANE|EXPLOSION', 
+                                          case=False, na=False)) |
+            (df['Actor2Name'].str.contains('EARTHQUAKE|FLOOD|FIRE|STORM|HURRICANE|EXPLOSION', 
+                                          case=False, na=False))
+        ].copy()
+        
+        print(f"Found {len(disaster_df)} disaster-related events for {date_str}")
+        return disaster_df
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Network error downloading GDELT data for {date_str}: {e}")
+        return None
+    except zipfile.BadZipFile as e:
+        print(f"Invalid zip file for {date_str}: {e}")
+        return None
+    except Exception as e:
+        print(f"Error processing GDELT data for {date_str}: {e}")
+        return None
+
+def transform_to_documents(df):
+    """Transform DataFrame to MongoDB documents"""
+    docs = []
+    
+    for _, row in df.iterrows():
+        try:
+            # Extract location (prefer ActionGeo, fallback to Actor1Geo)
+            lat = row.get('ActionGeo_Lat') or row.get('Actor1Geo_Lat')
+            lon = row.get('ActionGeo_Long') or row.get('Actor1Geo_Long')
+            
+            if pd.isna(lat) or pd.isna(lon):
+                continue
+                
+            lat, lon = float(lat), float(lon)
+            
+            # Validate coordinates
+            if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+                continue
+            
+            # Extract and clean data
+            event_code = str(row.get('EventCode', ''))
+            base_code = str(row.get('EventBaseCode', ''))
+            goldstein = float(row.get('GoldsteinScale', 0))
+            mentions = int(row.get('NumMentions', 0))
+            tone = float(row.get('AvgTone', 0))
+            
+            # Classification and analysis
+            keywords = extract_keywords_from_actors(
+                row.get('Actor1Name'), row.get('Actor2Name'))
+            disaster_type = classify_disaster_type(
+                event_code, base_code, keywords,
+                row.get('Actor1Name'), row.get('Actor2Name'))
+            severity = calculate_severity(goldstein, mentions, tone)
+            
+            doc = {
+                "event_id": str(row["GLOBALEVENTID"]),
+                "date": datetime.strptime(str(row["SQLDATE"]), "%Y%m%d"),
+                "actor1": row.get("Actor1Name"),
+                "actor2": row.get("Actor2Name"),
+                "event_code": event_code,
+                "base_code": base_code,
+                "root_code": str(row.get("EventRootCode", "")),
+                "goldstein": goldstein,
+                "tone": tone,
+                "mentions": mentions,
+                "articles": int(row.get("NumArticles", 0)),
+                "sources": int(row.get("NumSources", 0)),
+                "location": {
+                    "type": "Point",
+                    "coordinates": [lon, lat]
+                },
+                "country_code": row.get("ActionGeo_CountryCode") or row.get("Actor1Geo_CountryCode"),
+                "location_name": row.get("ActionGeo_FullName") or row.get("Actor1Geo_FullName"),
+                "source_url": row.get("SOURCEURL"),
+                "disaster_type": disaster_type,
+                "severity": severity,
+                "keywords": keywords,
+                "processed_date": datetime.now()
+            }
+            docs.append(doc)
+            
+        except (ValueError, TypeError) as e:
+            logging.warning(f"Error processing row {row.get('GLOBALEVENTID')}: {e}")
+            continue
+    
+    return docs
+
+def collect_disaster_data(start_date, end_date):
+    """Collect disaster data for date range"""
+    current_date = datetime.strptime(start_date, "%Y%m%d")
+    end_date_obj = datetime.strptime(end_date, "%Y%m%d")
+    
+    total_docs = 0
+    
+    while current_date <= end_date_obj:
+        date_str = current_date.strftime("%Y%m%d")
+        print(f"Processing {date_str}...")
+        
+        df = download_and_process_gdelt(date_str)
+        if df is not None and not df.empty:
+            docs = transform_to_documents(df)
+            if docs:
+                try:
+                    # Insert with duplicate handling
+                    for doc in docs:
+                        collection.replace_one(
+                            {"event_id": doc["event_id"]},
+                            doc,
+                            upsert=True
+                        )
+                    total_docs += len(docs)
+                    print(f"Processed {len(docs)} disaster records for {date_str}")
+                except Exception as e:
+                    logging.error(f"Error inserting data for {date_str}: {e}")
+        else:
+            print(f"No disaster data found for {date_str}")
+        
+        current_date += timedelta(days=1)
+    
+    print(f"Total disaster records collected: {total_docs}")
+    return total_docs
+
+# --- Run Data Collection ---
 if __name__ == "__main__":
-    main()
+    # FIX: Use correct date range (2024, not 2025)
+    # Collect data for May 26 - June 2, 2024
+    start_date = "20250526"  # May 26, 2025
+    end_date = "20250602"    # June 2, 2025
+    
+    print(f"Collecting GDELT disaster data from {start_date} to {end_date}")
+    collect_disaster_data(start_date, end_date)
+    
+    # Verify collection
+    total_count = collection.count_documents({})
+    print(f"Total documents in collection: {total_count}")
+    
+    # Sample query by date range
+    sample_disasters = list(collection.find({
+        "date": {
+            "$gte": datetime(2024, 5, 26),
+            "$lte": datetime(2024, 6, 2)
+        }
+    }).limit(10))
+    
+    print(f"Sample disasters from date range: {len(sample_disasters)} found")
+    for disaster in sample_disasters:
+        print(f"- {disaster['date'].strftime('%Y-%m-%d')}: {disaster['disaster_type'].title()} in {disaster['location_name']} "
+              f"(Severity: {disaster['severity']})")

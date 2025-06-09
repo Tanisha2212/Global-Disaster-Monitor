@@ -20,13 +20,14 @@ st.set_page_config(
 )
 
 # MongoDB connection
-@st.cache_resource
-def init_mongodb():
-    MONGO_URI = "mongodb+srv://Tanisha:Hello123@worlddisastersproject.rew0hfd.mongodb.net/?ssl=true&ssl_cert_reqs=CERT_NONE&retryWrites=true&w=majority"
-    client = MongoClient(MONGO_URI, tls=True, tlsInsecure=True)
-    return client["gdelt"]["disasters"]
 
-collection = init_mongodb()
+MONGO_URI = os.getenv('MONGO_URI')
+if not MONGO_URI:
+    raise ValueError("MONGO_URI environment variable is required")
+
+client = MongoClient(MONGO_URI, tls=True, tlsInsecure=True)
+db = client["gdelt"]
+collection = db["disasters"]
 
 # Load data with enhanced location parsing
 @st.cache_data(ttl=600)
