@@ -1,92 +1,18 @@
-# dashboard.py
 import streamlit as st
 import pandas as pd
-from pymongo import MongoClient
-from datetime import datetime, timedelta
+import json
 import plotly.express as px
 import plotly.graph_objects as go
-import json
-import requests
-import os
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
-st.set_page_config(
-    page_title="🌍 Global Disaster Monitor - Google x MongoDB",
-    page_icon="🌍",
-    layout="wide"
-)
-
-# MongoDB connection
-
-MONGO_URI = os.getenv('MONGO_URI')
-if not MONGO_URI:
-    raise ValueError("MONGO_URI environment variable is required")
-
-client = MongoClient(MONGO_URI, tls=True, tlsInsecure=True)
-db = client["gdelt"]
-collection = db["disasters"]
-
-# Load data with enhanced location parsing
-@st.cache_data(ttl=600)
-def load_disaster_data():
-    disasters = list(collection.find({}).limit(2000))
-    
-    df_data = []
-    for doc in disasters:
-        coords = doc['location']['coordinates']
-        location_parts = str(doc.get('location_name', '')).split(', ')
-        
-        # Parse location hierarchy
-        country = location_parts[-1] if len(location_parts) > 0 else 'Unknown'
-        state = location_parts[-2] if len(location_parts) > 1 else 'Unknown'
-        city = location_parts[0] if len(location_parts) > 0 else 'Unknown'
-        
-        df_data.append({
-            'lat': coords[1],
-            'lon': coords[0],
-            'disaster_type': doc['disaster_type'],
-            'severity': doc['severity'],
-            'location_name': doc['location_name'],
-            'country': country,
-            'state': state,
-            'city': city,
-            'date': doc['date'],
-            'date_str': doc['date'].strftime('%Y-%m-%d'),
-            'mentions': doc['mentions'],
-            'topic_keywords': ', '.join(doc.get('topic_keywords', [])),
-            'source_url': doc.get('source_url', ''),
-            'actor1': str(doc.get('actor1', '')),
-            'actor2': str(doc.get('actor2', '')),
-            'goldstein': doc.get('goldstein', 0),
-            'tone': doc.get('tone', 0),
-            'cluster_id': doc.get('cluster_id', 'N/A')
-        })
-    
-    return pd.DataFrame(df_data)
-
-# Color mapping for disaster types
-DISASTER_COLORS = {
-    'earthquake': '#FF0000',
-    'flood': '#0066CC', 
-    'wildfire': '#FF6600',
-    'storm': '#9900CC',
-    'armed_conflict': '#CC0000',
-    'explosion': '#FF3300',
-    'accident': '#FFCC00',
-    'other': '#666666'
-}
+from datetime import timedelta
+from data_handler import DataHandler
+from config import Config
+from report_generator import generate_report
 
 def create_google_map_html(df_filtered):
     """Create Google Maps HTML with markers"""
-    google_api_key = os.getenv('GOOGLE_MAPS_API_KEY')
-    
-    # Prepare markers data
     markers_data = []
     for _, row in df_filtered.iterrows():
-        color = DISASTER_COLORS.get(row['disaster_type'], '#666666')
+        color = Config.DISASTER_COLORS.get(row['disaster_type'], '#666666')
         
         marker_data = {
             'lat': row['lat'],
@@ -108,7 +34,7 @@ def create_google_map_html(df_filtered):
         }
         markers_data.append(marker_data)
     
-    if not google_api_key:
+    if not Config.GOOGLE_MAPS_API_KEY:
         return f"""
         <!DOCTYPE html>
         <html>
@@ -129,7 +55,7 @@ def create_google_map_html(df_filtered):
     <!DOCTYPE html>
     <html>
     <head>
-        <script async defer src="https://maps.googleapis.com/maps/api/js?key={google_api_key}&callback=initMap"></script>
+        <script async defer src="https://maps.googleapis.com/maps/api/js?key={Config.GOOGLE_MAPS_API_KEY}&callback=initMap"></script>
     </head>
     <body>
         <div id="map" style="height: 500px; width: 100%;"></div>
@@ -174,8 +100,87 @@ def create_google_map_html(df_filtered):
     </html>
     """
 
-# Main app
+def create_heatmap(df_filtered):
+    """Create a density heatmap of disasters"""
+    fig = px.density_mapbox(
+        df_filtered,
+        lat='lat',
+        lon='lon',
+        z='severity',
+        radius=20,
+        center=dict(lat=20, lon=0),
+        zoom=1,
+        mapbox_style="stamen-terrain",
+        title="🌋 Disaster Severity Heatmap",
+        color_continuous_scale="hot"
+    )
+    return fig
+
+def create_disaster_network(df_filtered):
+    """Create a network graph of actors involved in disasters"""
+    if len(df_filtered) < 2:
+        return None
+    
+    # Prepare nodes and links data
+    actors = pd.concat([df_filtered['actor1'], df_filtered['actor2']]).value_counts().head(10)
+    
+    nodes = [{'name': actor, 'group': 1} for actor in actors.index]
+    links = []
+    
+    for _, row in df_filtered.iterrows():
+        if row['actor1'] and row['actor2'] and row['actor1'] in actors.index and row['actor2'] in actors.index:
+            links.append({
+                'source': row['actor1'],
+                'target': row['actor2'],
+                'value': row['severity']
+            })
+    
+    if not links:
+        return None
+    
+    # Create the network graph
+    fig = go.Figure()
+    
+    # Add edges
+    for link in links:
+        fig.add_trace(go.Scatter(
+            x=[link['source'], link['target']],
+            y=[1, 1],
+            mode='lines',
+            line=dict(width=link['value']*0.5, color='#888'),
+            hoverinfo='none'
+        ))
+    
+    # Add nodes
+    fig.add_trace(go.Scatter(
+        x=[node['name'] for node in nodes],
+        y=[1]*len(nodes),
+        mode='markers',
+        marker=dict(
+            size=20,
+            color=[Config.DISASTER_COLORS.get('armed_conflict', '#666666')]*len(nodes)
+        ),
+        text=[node['name'] for node in nodes],
+        hoverinfo='text'
+    ))
+    
+    fig.update_layout(
+        title='🤝 Actor Network in Disasters',
+        showlegend=False,
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        height=400
+    )
+    
+    return fig
+
 def main():
+    st.set_page_config(
+        page_title="🌍 Global Disaster Monitor - Google x MongoDB",
+        page_icon="🌍",
+        layout="wide"
+    )
+    
     # Header
     st.markdown("""
     # 🌍 Global Disaster Monitor
@@ -184,8 +189,9 @@ def main():
     """)
     
     # Load data
+    data_handler = DataHandler()
     with st.spinner("🔄 Loading disaster data from MongoDB..."):
-        df = load_disaster_data()
+        df = data_handler.load_disaster_data()
     
     if df.empty:
         st.error("❌ No data available. Please run the data collection script first.")
@@ -210,12 +216,13 @@ def main():
         start_date, end_date = date_range
         df = df[(df['date'].dt.date >= start_date) & (df['date'].dt.date <= end_date)]
     
-    # Country filter
+    # Country filter - show only top 5 initially
+    top_countries = data_handler.get_top_countries(df)
     countries = sorted(df['country'].unique().tolist())
     selected_countries = st.sidebar.multiselect(
         "🏳️ Select Countries",
         countries,
-        default=countries[:10] if len(countries) > 10 else countries
+        default=top_countries
     )
     
     # Disaster type filter
@@ -271,6 +278,7 @@ def main():
     st.markdown("## 📊 Disaster Analytics")
     
     if not df_filtered.empty:
+        # First row of charts
         col1, col2 = st.columns(2)
         
         with col1:
@@ -278,7 +286,9 @@ def main():
             fig_pie = px.pie(
                 values=type_counts.values,
                 names=type_counts.index,
-                title="🔥 Disaster Types Distribution"
+                title="🔥 Disaster Types Distribution",
+                color=type_counts.index,
+                color_discrete_map=Config.DISASTER_COLORS
             )
             st.plotly_chart(fig_pie, use_container_width=True)
         
@@ -288,9 +298,37 @@ def main():
                 x=severity_by_country.values,
                 y=severity_by_country.index,
                 orientation='h',
-                title="⚠️ Average Severity by Country"
+                title="⚠️ Average Severity by Country",
+                color=severity_by_country.values,
+                color_continuous_scale='reds'
             )
             st.plotly_chart(fig_bar, use_container_width=True)
+        
+        # Second row of charts
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig_heatmap = create_heatmap(df_filtered)
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+        
+        with col2:
+            fig_network = create_disaster_network(df_filtered)
+            if fig_network:
+                st.plotly_chart(fig_network, use_container_width=True)
+            else:
+                st.info("Not enough data to show actor network")
+        
+        # Report generation
+        st.markdown("## 📝 Generate Report")
+        report_name = st.text_input("Enter report name", "Disaster_Report")
+        if st.button("📄 Generate PDF Report"):
+            report_bytes = generate_report(df_filtered, report_name)
+            st.download_button(
+                label="⬇️ Download Report",
+                data=report_bytes,
+                file_name=f"{report_name}.pdf",
+                mime="application/pdf"
+            )
     
     # Footer
     st.markdown("---")
