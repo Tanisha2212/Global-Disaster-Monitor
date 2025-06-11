@@ -4,12 +4,11 @@ import json
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import timedelta
-from data_handler import DataHandler
+from datahandler import DataHandler
 from config import Config
 from report_generator import generate_report
 
 def create_google_map_html(df_filtered):
-    """Create Google Maps HTML with markers"""
     markers_data = []
     for _, row in df_filtered.iterrows():
         color = Config.DISASTER_COLORS.get(row['disaster_type'], '#666666')
@@ -36,19 +35,14 @@ def create_google_map_html(df_filtered):
     
     if not Config.GOOGLE_MAPS_API_KEY:
         return f"""
-        <!DOCTYPE html>
-        <html>
-        <body>
-            <div style="padding: 20px; text-align: center; background: #f0f0f0; height: 460px; display: flex; align-items: center; justify-content: center;">
-                <div>
-                    <h3>🗺️ Google Maps View</h3>
-                    <p>Google Maps API key not found in environment variables</p>
-                    <p>Add GOOGLE_MAPS_API_KEY to your .env file</p>
-                    <p>Current markers: {len(markers_data)} disasters</p>
-                </div>
+        <div style="padding: 20px; text-align: center; background: #f0f0f0; height: 460px; display: flex; align-items: center; justify-content: center;">
+            <div>
+                <h3>🗺️ Google Maps View</h3>
+                <p>Google Maps API key not found</p>
+                <p>Add GOOGLE_MAPS_API_KEY to your .env file</p>
+                <p>Current markers: {len(markers_data)} disasters</p>
             </div>
-        </body>
-        </html>
+        </div>
         """
     
     return f"""
@@ -59,7 +53,6 @@ def create_google_map_html(df_filtered):
     </head>
     <body>
         <div id="map" style="height: 500px; width: 100%;"></div>
-        
         <script>
             let map;
             let markers = {json.dumps(markers_data)};
@@ -100,83 +93,75 @@ def create_google_map_html(df_filtered):
     </html>
     """
 
-def create_heatmap(df_filtered):
-    """Create a density heatmap of disasters"""
-    fig = px.density_mapbox(
+def create_cluster_map(df_filtered):
+    fig = px.scatter_mapbox(
         df_filtered,
         lat='lat',
         lon='lon',
-        z='severity',
-        radius=20,
-        center=dict(lat=20, lon=0),
+        color='disaster_type',
+        color_discrete_map=Config.DISASTER_COLORS,
         zoom=1,
-        mapbox_style="stamen-terrain",
-        title="🌋 Disaster Severity Heatmap",
-        color_continuous_scale="hot"
+        height=500,
+        title="Cluster Map View",
+        hover_data=['location_name', 'severity', 'date_str']
+    )
+    fig.update_layout(mapbox_style="open-street-map")
+    return fig
+
+def create_correlation_matrix(df_filtered):
+    corr_matrix = data_handler.get_correlation_matrix(df_filtered)
+    fig = px.imshow(
+        corr_matrix,
+        text_auto=True,
+        aspect="auto",
+        color_continuous_scale='RdBu',
+        title="Feature Correlation Matrix"
     )
     return fig
 
-def create_disaster_network(df_filtered):
-    """Create a network graph of actors involved in disasters"""
-    if len(df_filtered) < 2:
-        return None
+def create_story_mode(df_stories):
+    stories_html = ""
+    for _, story in df_stories.iterrows():
+        stories_html += f"""
+        <div style="border-left: 3px solid {Config.DISASTER_COLORS.get(story['disaster_type'], '#666666')}; 
+                    padding-left: 10px; margin-bottom: 20px;">
+            <h4>{story['disaster_type'].title()} in {story['country']}</h4>
+            <p><strong>📅 Date:</strong> {story['date_str']}</p>
+            <p><strong>⚠️ Severity:</strong> {story['severity']}/5</p>
+            <p><strong>📰 Mentions:</strong> {story['mentions']}</p>
+            <p>{story['topic_keywords']}</p>
+        </div>
+        """
     
-    # Prepare nodes and links data
-    actors = pd.concat([df_filtered['actor1'], df_filtered['actor2']]).value_counts().head(10)
-    
-    nodes = [{'name': actor, 'group': 1} for actor in actors.index]
-    links = []
-    
-    for _, row in df_filtered.iterrows():
-        if row['actor1'] and row['actor2'] and row['actor1'] in actors.index and row['actor2'] in actors.index:
-            links.append({
-                'source': row['actor1'],
-                'target': row['actor2'],
-                'value': row['severity']
-            })
-    
-    if not links:
-        return None
-    
-    # Create the network graph
-    fig = go.Figure()
-    
-    # Add edges
-    for link in links:
-        fig.add_trace(go.Scatter(
-            x=[link['source'], link['target']],
-            y=[1, 1],
-            mode='lines',
-            line=dict(width=link['value']*0.5, color='#888'),
-            hoverinfo='none'
-        ))
-    
-    # Add nodes
-    fig.add_trace(go.Scatter(
-        x=[node['name'] for node in nodes],
-        y=[1]*len(nodes),
-        mode='markers',
-        marker=dict(
-            size=20,
-            color=[Config.DISASTER_COLORS.get('armed_conflict', '#666666')]*len(nodes)
-        ),
-        text=[node['name'] for node in nodes],
-        hoverinfo='text'
-    ))
-    
-    fig.update_layout(
-        title='🤝 Actor Network in Disasters',
-        showlegend=False,
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        height=400
-    )
-    
-    return fig
+    return f"""
+    <div style="display: flex;">
+        <div style="flex: 1;">
+            {stories_html}
+        </div>
+        <div style="width: 100px; text-align: center;">
+            <div style="font-size: 48px;">{Config.STORY_MODE_ICON}</div>
+            <p style="font-size: 12px; margin-top: 0;">Analyst Summary</p>
+        </div>
+    </div>
+    """
+
+def create_news_feed(news_items):
+    news_html = ""
+    for item in news_items:
+        news_html += f"""
+        <div style="margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #eee;">
+            <h4 style="margin-bottom: 5px;">{item['title']}</h4>
+            <p style="color: #666; font-size: 0.8em; margin: 0;">
+                {item['source']} • {item['published_at']}
+            </p>
+            <a href="{item['url']}" target="_blank" style="font-size: 0.9em;">Read more</a>
+        </div>
+        """
+    return news_html
 
 def main():
     st.set_page_config(
-        page_title="🌍 Global Disaster Monitor - Google x MongoDB",
+        page_title="🌍 Global Disaster Monitor",
         page_icon="🌍",
         layout="wide"
     )
@@ -188,8 +173,11 @@ def main():
     Real-time disaster tracking using GDELT data with AI analysis
     """)
     
-    # Load data
+    # Initialize data handler
+    global data_handler
     data_handler = DataHandler()
+    
+    # Load data
     with st.spinner("🔄 Loading disaster data from MongoDB..."):
         df = data_handler.load_disaster_data()
     
@@ -216,7 +204,7 @@ def main():
         start_date, end_date = date_range
         df = df[(df['date'].dt.date >= start_date) & (df['date'].dt.date <= end_date)]
     
-    # Country filter - show only top 5 initially
+    # Country filter
     top_countries = data_handler.get_top_countries(df)
     countries = sorted(df['country'].unique().tolist())
     selected_countries = st.sidebar.multiselect(
@@ -242,6 +230,18 @@ def main():
         value=(1, 5)
     )
     
+    # Map view option
+    st.sidebar.markdown("### 🗺️ Map View Options")
+    use_clusters = st.sidebar.checkbox("Use Cluster Map", value=Config.CLUSTER_MAP_OPTION)
+    
+    # Live News Feed
+    st.sidebar.markdown("## 📰 Live News Feed")
+    if st.sidebar.button("🔄 Refresh News"):
+        st.cache_data.clear()
+    
+    news_items = data_handler.fetch_news(query=" OR ".join(selected_types)) if selected_types else []
+    st.sidebar.markdown(create_news_feed(news_items), unsafe_allow_html=True)
+    
     # Apply all filters
     df_filtered = df_country_filtered[
         (df_country_filtered['disaster_type'].isin(selected_types)) &
@@ -251,7 +251,6 @@ def main():
     
     # Main metrics
     col1, col2, col3, col4 = st.columns(4)
-    
     with col1:
         st.metric("🌍 Total Disasters", len(df_filtered))
     with col2:
@@ -266,19 +265,20 @@ def main():
     
     # Map section
     st.markdown("## 🗺️ Interactive Disaster Map")
-    
     if not df_filtered.empty:
-        google_map_html = create_google_map_html(df_filtered)
-        st.components.v1.html(google_map_html, height=520)
+        if use_clusters and Config.CLUSTER_MAP_OPTION:
+            cluster_fig = create_cluster_map(df_filtered)
+            st.plotly_chart(cluster_fig, use_container_width=True)
+        else:
+            google_map_html = create_google_map_html(df_filtered)
+            st.components.v1.html(google_map_html, height=520)
         st.info(f"📍 Showing {len(df_filtered)} disasters on map")
     else:
         st.warning("⚠️ No disasters match your current filters")
     
     # Analytics charts
     st.markdown("## 📊 Disaster Analytics")
-    
     if not df_filtered.empty:
-        # First row of charts
         col1, col2 = st.columns(2)
         
         with col1:
@@ -304,31 +304,25 @@ def main():
             )
             st.plotly_chart(fig_bar, use_container_width=True)
         
-        # Second row of charts
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig_heatmap = create_heatmap(df_filtered)
-            st.plotly_chart(fig_heatmap, use_container_width=True)
-        
-        with col2:
-            fig_network = create_disaster_network(df_filtered)
-            if fig_network:
-                st.plotly_chart(fig_network, use_container_width=True)
-            else:
-                st.info("Not enough data to show actor network")
-        
-        # Report generation
-        st.markdown("## 📝 Generate Report")
-        report_name = st.text_input("Enter report name", "Disaster_Report")
-        if st.button("📄 Generate PDF Report"):
-            report_bytes = generate_report(df_filtered, report_name)
-            st.download_button(
-                label="⬇️ Download Report",
-                data=report_bytes,
-                file_name=f"{report_name}.pdf",
-                mime="application/pdf"
-            )
+        # Correlation matrix
+        st.plotly_chart(create_correlation_matrix(df_filtered), use_container_width=True)
+    
+    # Story Mode
+    st.markdown("## 📖 Quick Analysis: Recent Major Events")
+    df_stories = data_handler.get_top_stories(df_filtered)
+    st.components.v1.html(create_story_mode(df_stories), height=400)
+    
+    # Report generation
+    st.markdown("## 📝 Generate Report")
+    report_name = st.text_input("Enter report name", "Disaster_Report")
+    if st.button("📄 Generate PDF Report"):
+        report_bytes = generate_report(df_filtered, report_name, df_stories)
+        st.download_button(
+            label="⬇️ Download Report",
+            data=report_bytes,
+            file_name=f"{report_name}.pdf",
+            mime="application/pdf"
+        )
     
     # Footer
     st.markdown("---")

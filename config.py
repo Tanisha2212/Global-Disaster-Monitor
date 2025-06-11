@@ -7,6 +7,7 @@ load_dotenv()
 class Config:
     MONGO_URI = os.getenv('MONGO_URI')
     GOOGLE_MAPS_API_KEY = os.getenv('GOOGLE_MAPS_API_KEY')
+    NEWS_API_KEY = os.getenv('NEWS_API_KEY')
     
     DISASTER_COLORS = {
         'earthquake': '#FF0000',
@@ -20,3 +21,6 @@ class Config:
     }
     
     DEFAULT_COUNTRIES_LIMIT = 5
+    CLUSTER_MAP_OPTION = True
+    STORY_MODE_ICON = "👩💻"
+    NEWS_SOURCES = ["BBC", "CNN", "Reuters", "AP"]

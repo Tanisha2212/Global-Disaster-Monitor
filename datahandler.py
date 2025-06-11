@@ -1,6 +1,7 @@
 from pymongo import MongoClient
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+import requests
 from config import Config
 
 class DataHandler:
@@ -35,14 +36,35 @@ class DataHandler:
                 'mentions': doc['mentions'],
                 'topic_keywords': ', '.join(doc.get('topic_keywords', [])),
                 'source_url': doc.get('source_url', ''),
-                'actor1': str(doc.get('actor1', '')),
-                'actor2': str(doc.get('actor2', '')),
                 'goldstein': doc.get('goldstein', 0),
-                'tone': doc.get('tone', 0),
-                'cluster_id': doc.get('cluster_id', 'N/A')
+                'tone': doc.get('tone', 0)
             })
         
         return pd.DataFrame(df_data)
     
     def get_top_countries(self, df, limit=Config.DEFAULT_COUNTRIES_LIMIT):
         return df['country'].value_counts().head(limit).index.tolist()
+    
+    def get_correlation_matrix(self, df):
+        numeric_df = df[['severity', 'mentions', 'goldstein', 'tone']]
+        return numeric_df.corr()
+    
+    def get_top_stories(self, df, limit=5):
+        return df.sort_values(['severity', 'mentions'], ascending=False).head(limit)
+    
+    def fetch_news(self, query="disaster", limit=5):
+        if not Config.NEWS_API_KEY:
+            return []
+            
+        try:
+            url = f"https://newsapi.org/v2/everything?q={query}&apiKey={Config.NEWS_API_KEY}&pageSize={limit}"
+            response = requests.get(url)
+            articles = response.json().get('articles', [])
+            return [{
+                'title': a.get('title', ''),
+                'source': a.get('source', {}).get('name', ''),
+                'url': a.get('url', ''),
+                'published_at': a.get('publishedAt', '')[:10]
+            } for a in articles]
+        except:
+            return []
