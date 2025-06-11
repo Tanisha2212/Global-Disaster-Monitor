@@ -166,12 +166,72 @@ def main():
         layout="wide"
     )
     
-    # Header
+    # Custom CSS for styling
     st.markdown("""
-    # 🌍 Global Disaster Monitor
-    ### Google Cloud × MongoDB Hackathon Project
-    Real-time disaster tracking using GDELT data with AI analysis
-    """)
+    <style>
+        /* Main header styling */
+        .header {
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            color: white;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        /* Metric cards styling */
+        .metric-card {
+            background: white;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            border-left: 4px solid #6a11cb;
+        }
+        
+        /* Sidebar styling */
+        .sidebar .sidebar-content {
+            background: #f8f9fa;
+        }
+        
+        /* Section headers */
+        .section-header {
+            color: #6a11cb;
+            border-bottom: 2px solid #6a11cb;
+            padding-bottom: 0.5rem;
+            margin-top: 2rem;
+        }
+        
+        /* Button styling */
+        .stButton>button {
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            padding: 0.5rem 1rem;
+        }
+        
+        .stButton>button:hover {
+            background: linear-gradient(135deg, #5a0db5 0%, #1a65e5 100%);
+            color: white;
+        }
+        
+        /* Input fields */
+        .stTextInput>div>div>input {
+            border-radius: 0.5rem;
+            border: 1px solid #ddd;
+            padding: 0.5rem;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Enhanced Header with purple gradient
+    st.markdown("""
+    <div class="header">
+        <h1 style="color: white; margin-bottom: 0.5rem;">🌍 Global Disaster Monitor</h1>
+        <h3 style="color: white; opacity: 0.9; margin-top: 0;">Google Cloud × MongoDB Hackathon Project</h3>
+        <p style="color: white; opacity: 0.8;">Real-time disaster tracking using GDELT data with AI analysis</p>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Initialize data handler
     global data_handler
@@ -185,8 +245,11 @@ def main():
         st.error("❌ No data available. Please run the data collection script first.")
         return
     
-    # Sidebar filters
-    st.sidebar.markdown("## 🔍 Advanced Filters")
+    # Sidebar filters with improved styling
+    st.sidebar.markdown("""
+    <div style="background: #f0f0f0; padding: 1rem; border-radius: 0.5rem;">
+        <h2 style="color: #6a11cb; margin-top: 0;">🔍 Advanced Filters</h2>
+    """, unsafe_allow_html=True)
     
     # Date range filter
     st.sidebar.markdown("### 📅 Date Range")
@@ -235,12 +298,17 @@ def main():
     use_clusters = st.sidebar.checkbox("Use Cluster Map", value=Config.CLUSTER_MAP_OPTION)
     
     # Live News Feed
-    st.sidebar.markdown("## 📰 Live News Feed")
+    st.sidebar.markdown("""
+    <div style="background: #f0f0f0; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
+        <h2 style="color: #6a11cb; margin-top: 0;">📰 Live News Feed</h2>
+    """, unsafe_allow_html=True)
+    
     if st.sidebar.button("🔄 Refresh News"):
         st.cache_data.clear()
     
     news_items = data_handler.fetch_news(query=" OR ".join(selected_types)) if selected_types else []
     st.sidebar.markdown(create_news_feed(news_items), unsafe_allow_html=True)
+    st.sidebar.markdown("</div>", unsafe_allow_html=True)
     
     # Apply all filters
     df_filtered = df_country_filtered[
@@ -249,22 +317,38 @@ def main():
         (df_country_filtered['severity'] <= severity_range[1])
     ]
     
-    # Main metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("🌍 Total Disasters", len(df_filtered))
-    with col2:
-        avg_severity = df_filtered['severity'].mean() if not df_filtered.empty else 0
-        st.metric("📊 Avg Severity", f"{avg_severity:.1f}/5")
-    with col3:
-        total_mentions = df_filtered['mentions'].sum() if not df_filtered.empty else 0
-        st.metric("📰 Total Mentions", f"{total_mentions:,}")
-    with col4:
-        unique_countries = df_filtered['country'].nunique() if not df_filtered.empty else 0
-        st.metric("🏳️ Countries Affected", unique_countries)
+    # Main metrics with card styling
+    st.markdown("""
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem;">
+        <div class="metric-card">
+            <h3 style="margin-top: 0; color: #6a11cb;">🌍 Total Disasters</h3>
+            <p style="font-size: 2rem; font-weight: bold; margin-bottom: 0;">{}</p>
+        </div>
+        <div class="metric-card">
+            <h3 style="margin-top: 0; color: #6a11cb;">📊 Avg Severity</h3>
+            <p style="font-size: 2rem; font-weight: bold; margin-bottom: 0;">{:.1f}/5</p>
+        </div>
+        <div class="metric-card">
+            <h3 style="margin-top: 0; color: #6a11cb;">📰 Total Mentions</h3>
+            <p style="font-size: 2rem; font-weight: bold; margin-bottom: 0;">{:,}</p>
+        </div>
+        <div class="metric-card">
+            <h3 style="margin-top: 0; color: #6a11cb;">🏳️ Countries Affected</h3>
+            <p style="font-size: 2rem; font-weight: bold; margin-bottom: 0;">{}</p>
+        </div>
+    </div>
+    """.format(
+        len(df_filtered),
+        df_filtered['severity'].mean() if not df_filtered.empty else 0,
+        df_filtered['mentions'].sum() if not df_filtered.empty else 0,
+        df_filtered['country'].nunique() if not df_filtered.empty else 0
+    ), unsafe_allow_html=True)
     
-    # Map section
-    st.markdown("## 🗺️ Interactive Disaster Map")
+    # Map section with improved header
+    st.markdown("""
+    <h2 class="section-header">🗺️ Interactive Disaster Map</h2>
+    """, unsafe_allow_html=True)
+    
     if not df_filtered.empty:
         if use_clusters and Config.CLUSTER_MAP_OPTION:
             cluster_fig = create_cluster_map(df_filtered)
@@ -276,8 +360,11 @@ def main():
     else:
         st.warning("⚠️ No disasters match your current filters")
     
-    # Analytics charts
-    st.markdown("## 📊 Disaster Analytics")
+    # Analytics charts with improved header
+    st.markdown("""
+    <h2 class="section-header">📊 Disaster Analytics</h2>
+    """, unsafe_allow_html=True)
+    
     if not df_filtered.empty:
         col1, col2 = st.columns(2)
         
@@ -307,28 +394,37 @@ def main():
         # Correlation matrix
         st.plotly_chart(create_correlation_matrix(df_filtered), use_container_width=True)
     
-    # Story Mode
-    st.markdown("## 📖 Quick Analysis: Recent Major Events")
+    # Story Mode with improved header
+    st.markdown("""
+    <h2 class="section-header">📖 Quick Analysis: Recent Major Events</h2>
+    """, unsafe_allow_html=True)
+    
     df_stories = data_handler.get_top_stories(df_filtered)
     st.components.v1.html(create_story_mode(df_stories), height=400)
     
-    # Report generation
-    st.markdown("## 📝 Generate Report")
+    # Report generation with improved styling
+    st.markdown("""
+    <h2 class="section-header">📝 Generate Report</h2>
+    """, unsafe_allow_html=True)
+    
     report_name = st.text_input("Enter report name", "Disaster_Report")
     if st.button("📄 Generate PDF Report"):
-        report_bytes = generate_report(df_filtered, report_name, df_stories)
-        st.download_button(
-            label="⬇️ Download Report",
-            data=report_bytes,
-            file_name=f"{report_name}.pdf",
-            mime="application/pdf"
-        )
+        with st.spinner("Generating report..."):
+            report_bytes = generate_report(df_filtered, report_name, df_stories)
+            st.download_button(
+                label="⬇️ Download Report",
+                data=report_bytes,
+                file_name=f"{report_name}.pdf",
+                mime="application/pdf"
+            )
     
-    # Footer
-    st.markdown("---")
+    # Footer with improved styling
     st.markdown("""
-    **🚀 Powered by:** Google Maps API • MongoDB Atlas • AI Topic Modeling • GDELT Project
-    """)
+    <div style="margin-top: 4rem; padding: 1rem; text-align: center; color: #666; border-top: 1px solid #eee;">
+        <p><strong>🚀 Powered by:</strong> Google Maps API • MongoDB Atlas • AI Topic Modeling • GDELT Project</p>
+        <p style="font-size: 0.8rem;">© 2023 Global Disaster Monitor</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
