@@ -298,18 +298,7 @@ def main():
     use_clusters = st.sidebar.checkbox("Use Cluster Map", value=Config.CLUSTER_MAP_OPTION)
     
     # Live News Feed
-    st.sidebar.markdown("""
-    <div style="background: #f0f0f0; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem;">
-        <h2 style="color: #6a11cb; margin-top: 0;">📰 Live News Feed</h2>
-    """, unsafe_allow_html=True)
-    
-    if st.sidebar.button("🔄 Refresh News"):
-        st.cache_data.clear()
-    
-    news_items = data_handler.fetch_news(query=" OR ".join(selected_types)) if selected_types else []
-    st.sidebar.markdown(create_news_feed(news_items), unsafe_allow_html=True)
-    st.sidebar.markdown("</div>", unsafe_allow_html=True)
-    
+   
     # Apply all filters
     df_filtered = df_country_filtered[
         (df_country_filtered['disaster_type'].isin(selected_types)) &
