@@ -1,49 +1,50 @@
-# Global-Disaster-Monitor
+# 🌍 Global Disaster Monitor
+
+An interactive **2D** map-based dashboard built with **Streamlit** to monitor, analyze, and visualize global disasters using the **GDELT dataset**, **MongoDB Atlas**, and **Google Maps API**.
+
+---
+
+## 🔍 What It Does
+
+- Fetches global disaster events from **GDELT**, filters & cleans them.
+- Stores records in **MongoDB Atlas**, including coordinates (`lon`, `lat`), category, severity, sentiment, and NLP embeddings.
+- Visualizes events on a **2D Google Map**, with country code and severity
+- Supports semantic "vector search" to find **similar events** globally.
+- Allows toggling between **clustered vs. normal markers**.
+- Generates **correlation matrices** between countries based on disaster frequency/types.
+- Enables **PDF/CSV report generation** for selected regions.
 
 
 ---
 
-## 🔍 Project Overview
+## 🔧 Built With
 
-An **interactive web dashboard** that visualizes global disasters using **real-time data from the GDELT Project**, enhanced by intelligent search and mapping features. This solution harnesses the power of **MongoDB Atlas** (with geospatial and vector search capabilities), **Streamlit**, and **Google Maps API** to offer data-driven insights into crises worldwide.
-
----
-
-## ⚡ Core Features
-
-- 🗺️ **Geospatial Dashboard**  
-  Visualize disasters globally using **latitude and longitude** stored in MongoDB, rendered via Google Maps integration.
-
-- 🔬 **MongoDB Atlas-powered Analysis**  
-  - Store GDELT event records (hourly snapshots or bulk imports) in **Atlas collections**  
-  - Query with **2dsphere geospatial indexing** (for location-based filtering)  
-  - Use **Atlas Vector Search** to find semantically similar events based on text embeddings
-
-- 📡 **Streamlit UI**  
-  - Interactive components allow users to filter by country, state, district, date range, and disaster type  
-  - Clickable map markers reveal event metadata (`event_type`, `severity`, `date`, `description`) and links to related news  
-  - "Find similar events" powered by vector search
+- **Streamlit** – Frontend dashboard 
+- **Python** – Data pipeline + logic  
+- **MongoDB Atlas** – Cloud storage with geospatial & **Vector Search**  
+- **GDELT** – Real-time disaster events source  
+- **Google Maps API** – Interactive 2D map overlays  
+- **scikit-learn / UMAP** – Topic modeling, clustering & correlation analysis  
+- **PyPDF2 / pandas** – Report generation  
+- **pymongo** – MongoDB connector
 
 ---
+<img width="1994" alt="Screenshot 2025-06-11 at 5 23 45 PM" src="https://github.com/user-attachments/assets/8da077d6-72f7-4747-8922-53bcb65def0c" />
+<img width="1994" alt="Screenshot 2025-06-11 at 5 24 19 PM" src="https://github.com/user-attachments/assets/cb3ab8aa-12bc-47e5-ae6f-1ea64ca30af9" />
 
-## 🛠️ Tech & Services Used
+<img width="1994" alt="Screenshot 2025-06-11 at 5 24 09 PM" src="https://github.com/user-attachments/assets/6f2a17ca-de89-4a96-b880-4b866b8d728f" />
+<img width="1994" alt="Screenshot 2025-06-11 at 5 24 39 PM" src="https://github.com/user-attachments/assets/1339c506-72a7-4c45-954d-65ac03555cb2" />
 
-| Layer            | Tools & Services |
-|------------------|------------------|
-| **Backend DB**   | MongoDB Atlas (geospatial, vector search) |
-| **Data Source**  | GDELT Global Events dataset |
-| **API & Data Fetching** | Python scripts to load/clean and store data |
-| **Search & Analytics** | Atlas Vector Search (semantic similarity), Aggregations |
-| **Frontend**     | Streamlit |
-| **Mapping**      | Google Maps JavaScript API |
-| **Deployment**   | (Optional) Google Cloud Run |
-| **Graphical Analysis** | Atlas Charts (optional)|
 
----
+## 🚀 Project Setup
 
-## 🚀 Setup & Installation
 
-### 1. Clone the repo
-```bash
 git clone https://github.com/Tanisha2212/Global-Disaster-Monitor.git
 cd Global-Disaster-Monitor
+
+## Update .env
+
+MONGODB_URI=your_mongodb_atlas_uri
+
+GOOGLE_MAPS_API_KEY=your_google_maps_key
+
